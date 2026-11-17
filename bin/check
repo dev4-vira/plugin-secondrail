@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# Quality gates, each in Docker: bin/check [lint|phpunit|plugin-check|shell|build]; no argument runs all five.
+set -euo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+bin="$root/bin"
+version="0.1.0"
+
+as_owner() { "$bin/dc" run --rm -T --no-deps --user "$(id -u):$(id -g)" tools "$@"; }
+
+lint() {
+	as_owner vendor/bin/phpcs
+}
+
+phpunit() {
+	"$bin/dc" run --rm -T --no-deps --user 33:33 tools php vendor/bin/phpunit "$@"
+}
+
+plugin_check() {
+	if ! "$bin/wp" plugin is-installed plugin-check; then
+		"$bin/wp" plugin install plugin-check
+	fi
+	"$bin/wp" plugin activate plugin-check
+	# The command exits 0 even when it finds errors: success is its own "No errors found".
+	local report
+	report="$("$bin/wp" plugin check secondrail-for-woocommerce --ignore-warnings --format=csv \
+		--fields=file,line,code,message)"
+	echo "$report"
+	grep -q 'No errors found' <<<"$report"
+}
+
+shell() {
+	docker run --rm --network none -v "$root:/mnt:ro" -w /mnt koalaman/shellcheck:stable bin/*
+}
+
+build() {
+	local zip="dist/secondrail-for-woocommerce-$version.zip"
+	as_owner sh -euc "
+		rm -rf dist && mkdir dist
+		zip -qrX $zip secondrail-for-woocommerce
+		unzip -l $zip
+		if unzip -Z1 $zip | grep -v '^secondrail-for-woocommerce/'; then
+			echo 'The zip holds files outside the plugin folder' >&2
+			exit 1
+		fi
+		rm -rf /tmp/build && mkdir /tmp/build
+		unzip -q $zip -d /tmp/build
+		find /tmp/build -name '*.php' -print0 | xargs -0 -n1 php -l
+	"
+}
+
+case "${1:-all}" in
+lint) lint ;;
+phpunit) shift; phpunit "$@" ;;
+plugin-check) plugin_check ;;
+shell) shell ;;
+build) build ;;
+all)
+	lint
+	phpunit
+	plugin_check
+	shell
+	build
+	;;
+*)
+	echo "Usage: bin/check [lint|phpunit|plugin-check|shell|build]" >&2
+	exit 2
+	;;
+esac

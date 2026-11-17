@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Playwright run against the SecondRail sandbox (R11) with the host's Node and the system Chromium.
+# Run bin/sandbox connect first. Any argument goes to `playwright test`.
+set -euo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+bin="$root/bin"
+e2e="$root/tests/e2e"
+
+if [[ ! -d "$e2e/node_modules/@playwright/test" ]]; then
+	if [[ -f "$e2e/package-lock.json" ]]; then
+		install=(npm ci --no-audit --no-fund)
+	else
+		install=(npm install --no-audit --no-fund)
+	fi
+	"$bin/dc" run --rm -T --no-deps --user "$(id -u):$(id -g)" \
+		-e PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 node "${install[@]}"
+fi
+
+WP_BASE="http://localhost:$(sed -n 's/^WP_PORT=//p' "$root/.env")"
+export WP_BASE
+export CHROMIUM="${CHROMIUM:-/snap/bin/chromium}"
+cd "$e2e"
+exec node node_modules/@playwright/test/cli.js test --workers=1 "$@"

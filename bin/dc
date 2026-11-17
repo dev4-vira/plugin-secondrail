@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# docker compose with this repository's files; adds the sandbox override when .env asks for it.
+set -euo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+files=(-f "$root/compose.yml")
+if [[ -f "$root/.env" ]] && grep -q '^SECONDRAIL_API_BASE=' "$root/.env"; then
+	files+=(-f "$root/compose.sandbox.yml")
+fi
+exec docker compose --project-directory "$root" "${files[@]}" "$@"

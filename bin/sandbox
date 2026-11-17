@@ -1,0 +1,143 @@
+#!/usr/bin/env bash
+# Real-sandbox run (R11) against the SecondRail development stack in ../orqbit.
+#   bin/sandbox connect   API base and a sandbox key into .env, gateway settings, webhook, test event
+#   bin/sandbox clean     delete the endpoint, revoke the key, remove both lines from .env
+# Secrets go straight into .env and into the container environment; they are never printed.
+set -euo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+bin="$root/bin"
+platform="$(cd "$root/../orqbit" && pwd)"
+env_file="$root/.env"
+key_name="plugin-secondrail-e2e"
+scopes='["payments:read","payments:write","refunds:read","refunds:write","action_links:write","webhooks:read","webhooks:write"]'
+
+django() {
+	(cd "$platform" && docker compose exec -T web-api python manage.py shell -c "$1")
+}
+
+revoke_keys() {
+	django "
+from apps.iam.models import ApiKey
+from apps.iam.services import api_keys
+for key in ApiKey.objects.filter(tenant__slug='honeypacks', name='$key_name', revoked_at__isnull=True):
+    api_keys.revoke(key)
+    print('revoked', key.public_id)
+"
+}
+
+drop_lines() {
+	sed -i '/^SECONDRAIL_API_BASE=/d;/^SECONDRAIL_TEST_SECRET_KEY=/d' "$env_file"
+}
+
+# wp eval with the sandbox values passed through the environment, never through arguments.
+wp_eval() {
+	(
+		set -a
+		# shellcheck disable=SC1090
+		. "$env_file"
+		set +a
+		"$bin/dc" run --rm -T --no-deps --user 33:33 \
+			-e SECONDRAIL_API_BASE -e SECONDRAIL_TEST_SECRET_KEY \
+			tools wp --path=/var/www/html eval "$1"
+	)
+}
+
+wait_for_wordpress() {
+	local port
+	port="$(sed -n 's/^WP_PORT=//p' "$env_file")"
+	for _ in $(seq 1 60); do
+		if curl -s -o /dev/null "http://localhost:$port/"; then
+			return 0
+		fi
+		sleep 2
+	done
+	echo "WordPress did not answer" >&2
+	return 1
+}
+
+connect() {
+	local domain mode base secret
+	domain="$(sed -n 's/^SECONDRAIL_DOMAIN=//p' "$platform/backend/.env" | tail -n 1)"
+	mode="$(sed -n 's/^SECONDRAIL_ROUTING_MODE=//p' "$platform/backend/.env" | tail -n 1)"
+	if [[ "$mode" == "subdomain" ]]; then
+		base="https://api.$domain/v1"
+	else
+		base="https://$domain/api/v1"
+	fi
+	revoke_keys >/dev/null
+	secret="$(django "
+from apps.iam.services import api_keys
+from apps.tenants.models import Tenant
+created = api_keys.create(Tenant.objects.get(slug='honeypacks'), False, name='$key_name', scopes=$scopes)
+print(created.secret)
+" | tail -n 1)"
+	if [[ "$secret" != sk_test_* ]]; then
+		echo "Could not create the sandbox key" >&2
+		exit 1
+	fi
+	drop_lines
+	umask 077
+	{
+		echo "SECONDRAIL_API_BASE=$base"
+		echo "SECONDRAIL_TEST_SECRET_KEY=$secret"
+	} >>"$env_file"
+	unset secret
+	chmod 600 "$env_file"
+
+	"$bin/dc" up -d wordpress
+	wait_for_wordpress
+	local php
+	php="$(
+		cat <<'PHP'
+		$options = get_option( "woocommerce_secondrail_settings", array() );
+		$options = array_merge( is_array( $options ) ? $options : array(), array(
+			"enabled"         => "yes",
+			"api_base"        => getenv( "SECONDRAIL_API_BASE" ),
+			"testmode"        => "yes",
+			"test_secret_key" => getenv( "SECONDRAIL_TEST_SECRET_KEY" ),
+			"debug"           => "yes",
+		) );
+		update_option( "woocommerce_secondrail_settings", $options );
+		$account  = \SecondRail\WooCommerce\Gateway::client( "test" )->get( "/account" );
+		$endpoint = \SecondRail\WooCommerce\Webhook::ensure_endpoint( "test" );
+		$test     = \SecondRail\WooCommerce\Gateway::client( "test" )->post( "/webhook_endpoints/" . $endpoint["id"] . "/test" );
+		echo "account livemode=" . ( empty( $account["livemode"] ) ? "false" : "true" ) . "\n";
+		echo "endpoint " . $endpoint["id"] . " url=" . $endpoint["url"] . "\n";
+		echo "test event ok=" . ( empty( $test["ok"] ) ? "false" : "true" ) . " status=" . $test["status_code"] . "\n";
+		if ( empty( $test["ok"] ) ) { exit( 1 ); }
+PHP
+	)"
+	wp_eval "$php"
+}
+
+clean() {
+	if grep -q '^SECONDRAIL_TEST_SECRET_KEY=' "$env_file"; then
+		local php
+		php="$(
+			cat <<'PHP'
+			\SecondRail\WooCommerce\Webhook::remove_endpoints();
+			$options = get_option( "woocommerce_secondrail_settings", array() );
+			if ( is_array( $options ) ) {
+				$options["test_secret_key"] = "";
+				$options["enabled"]         = "no";
+				update_option( "woocommerce_secondrail_settings", $options );
+			}
+			echo "endpoint deleted, key cleared from the settings\n";
+PHP
+		)"
+		wp_eval "$php" || echo "Could not delete the endpoint through the plugin" >&2
+	fi
+	revoke_keys
+	drop_lines
+	"$bin/dc" up -d wordpress
+}
+
+case "${1:-}" in
+connect) connect ;;
+clean) clean ;;
+*)
+	echo "Usage: bin/sandbox connect|clean" >&2
+	exit 2
+	;;
+esac

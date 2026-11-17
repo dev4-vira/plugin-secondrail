@@ -1,0 +1,46 @@
+<?xml version="1.0"?>
+<ruleset name="SecondRail for WooCommerce">
+	<description>WordPress Coding Standards and PHP 7.4 compatibility for the shippable plugin.</description>
+
+	<file>./secondrail-for-woocommerce</file>
+
+	<arg name="extensions" value="php"/>
+	<arg value="sp"/>
+	<arg name="colors"/>
+
+	<config name="testVersion" value="7.4-"/>
+	<config name="minimum_wp_version" value="7.0"/>
+
+	<rule ref="WordPress"/>
+	<rule ref="PHPCompatibilityWP"/>
+
+	<!-- The contract keeps Api_Error beside Api_Client, in one file. -->
+	<rule ref="Generic.Files.OneObjectStructurePerFile">
+		<exclude-pattern>includes/class-api-client\.php$</exclude-pattern>
+	</rule>
+
+	<rule ref="WordPress.WP.I18n">
+		<properties>
+			<property name="text_domain" type="array">
+				<element value="secondrail-for-woocommerce"/>
+			</property>
+		</properties>
+	</rule>
+
+	<rule ref="WordPress.WP.Capabilities">
+		<properties>
+			<property name="custom_capabilities" type="array">
+				<element value="manage_woocommerce"/>
+			</property>
+		</properties>
+	</rule>
+
+	<rule ref="WordPress.NamingConventions.PrefixAllGlobals">
+		<properties>
+			<property name="prefixes" type="array">
+				<element value="secondrail_wc"/>
+				<element value="SecondRail\WooCommerce"/>
+			</property>
+		</properties>
+	</rule>
+</ruleset>

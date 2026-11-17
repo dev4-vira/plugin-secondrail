@@ -1,0 +1,30 @@
+# Real-sandbox override (R11), added by bin/dc when .env has SECONDRAIL_API_BASE. WordPress joins
+# the SecondRail development network so the SecondRail worker can deliver webhooks to it, and the
+# plugin registers that address as its webhook URL.
+x-wp-config-extra: &wp-config-extra |
+  define( 'WP_HOME', 'http://localhost:' . getenv( 'WP_PORT' ) );
+  define( 'WP_SITEURL', 'http://localhost:' . getenv( 'WP_PORT' ) );
+  define( 'WP_DEBUG_LOG', true );
+  define( 'WP_DEBUG_DISPLAY', false );
+  define( 'AUTOMATIC_UPDATER_DISABLED', true );
+  define( 'WP_AUTO_UPDATE_CORE', false );
+  define( 'SECONDRAIL_WC_WEBHOOK_URL', 'http://plugin-secondrail-wp/?wc-api=secondrail_webhook' );
+
+services:
+  wordpress:
+    environment:
+      WORDPRESS_CONFIG_EXTRA: *wp-config-extra
+    networks:
+      default: {}
+      secondrail:
+        aliases:
+          - plugin-secondrail-wp
+
+  tools:
+    environment:
+      WORDPRESS_CONFIG_EXTRA: *wp-config-extra
+
+networks:
+  secondrail:
+    name: secondrail_default
+    external: true

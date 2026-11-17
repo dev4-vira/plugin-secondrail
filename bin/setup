@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+# Idempotent: creates .env, starts the stack and prepares a store with WooCommerce and the plugin.
+set -euo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+bin="$root/bin"
+cd "$root"
+
+if [[ ! -f .env ]]; then
+	umask 077
+	{
+		echo "WP_PORT=8190"
+		echo "DB_PASSWORD=$(openssl rand -hex 16)"
+		echo "DB_ROOT_PASSWORD=$(openssl rand -hex 16)"
+		echo "WP_ADMIN_PASSWORD=$(openssl rand -hex 16)"
+	} >.env
+fi
+chmod 600 .env
+port="$(sed -n 's/^WP_PORT=//p' .env)"
+admin_password="$(sed -n 's/^WP_ADMIN_PASSWORD=//p' .env)"
+
+"$bin/dc" build tools
+"$bin/dc" up -d db wordpress
+echo "Waiting for the WordPress files..."
+for _ in $(seq 1 60); do
+	if "$bin/dc" exec -T wordpress test -f /var/www/html/wp-config.php; then
+		break
+	fi
+	sleep 2
+done
+
+wp() { "$bin/wp" "$@"; }
+
+if ! wp core is-installed 2>/dev/null; then
+	wp core install --url="http://localhost:$port" --title="SecondRail Dev Store" \
+		--admin_user=admin --admin_password="$admin_password" \
+		--admin_email=admin@example.com --skip-email
+fi
+
+if [[ "$(wp plugin get woocommerce --field=version 2>/dev/null || true)" != "11.3.0" ]]; then
+	wp plugin install woocommerce --version=11.3.0 --force
+fi
+wp plugin activate woocommerce
+wp plugin activate secondrail-for-woocommerce
+
+wp option update woocommerce_default_country "US:CA"
+wp option update woocommerce_currency USD
+wp option update woocommerce_enable_guest_checkout yes
+wp option update woocommerce_coming_soon no
+wp rewrite structure '/%postname%/'
+wp rewrite flush
+
+if [[ -z "$(wp post list --post_type=product --name=secondrail-test-product --format=ids)" ]]; then
+	wp wc product create --user=admin --name="SecondRail test product" \
+		--slug=secondrail-test-product --type=simple --regular_price=19.99 --virtual=true
+fi
+if [[ -z "$(wp post list --post_type=page --name=classic-checkout --format=ids)" ]]; then
+	wp post create --post_type=page --post_status=publish --post_title="Classic checkout" \
+		--post_name=classic-checkout --post_content='[woocommerce_checkout]'
+fi
+for gateway in $(wp wc payment_gateway list --user=admin --field=id); do
+	if [[ "$gateway" != "secondrail" ]]; then
+		wp wc payment_gateway update "$gateway" --user=admin --enabled=false >/dev/null
+	fi
+done
+
+"$bin/composer" install --no-interaction --no-progress
+
+code="$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:$port/")"
+echo "Store: http://localhost:$port/ answered $code"

@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# wp-cli inside the tools container, as the owner of the WordPress volume.
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec "$here/dc" run --rm -T --no-deps --user 33:33 tools wp --path=/var/www/html "$@"

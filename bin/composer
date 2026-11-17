@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Composer inside the tools container, as the owner of the repository.
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec "$here/dc" run --rm -T --no-deps --user "$(id -u):$(id -g)" tools composer "$@"

@@ -1,0 +1,91 @@
+# Development stack for SecondRail for WooCommerce. Use it through bin/dc.
+name: plugin-secondrail
+
+# Extra wp-config.php lines, read at runtime by the official image's wp-config (WordPress and wp-cli).
+x-wp-config-extra: &wp-config-extra |
+  define( 'WP_HOME', 'http://localhost:' . getenv( 'WP_PORT' ) );
+  define( 'WP_SITEURL', 'http://localhost:' . getenv( 'WP_PORT' ) );
+  define( 'WP_DEBUG_LOG', true );
+  define( 'WP_DEBUG_DISPLAY', false );
+  define( 'AUTOMATIC_UPDATER_DISABLED', true );
+  define( 'WP_AUTO_UPDATE_CORE', false );
+
+services:
+  db:
+    image: mariadb:11.4.13
+    command:
+      - --innodb-buffer-pool-size=64M
+      - --performance-schema=OFF
+      - --max-connections=30
+    environment:
+      MARIADB_DATABASE: wordpress
+      MARIADB_USER: wordpress
+      MARIADB_PASSWORD: ${DB_PASSWORD:?run bin/setup}
+      MARIADB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:?run bin/setup}
+    volumes:
+      - db:/var/lib/mysql
+      - ./docker/db:/docker-entrypoint-initdb.d:ro
+    mem_limit: 256m
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  wordpress:
+    image: wordpress:7.1.4-php8.3-apache
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${WP_PORT:-8190}:80"
+    environment:
+      WORDPRESS_DB_HOST: db
+      WORDPRESS_DB_USER: wordpress
+      WORDPRESS_DB_PASSWORD: ${DB_PASSWORD:?run bin/setup}
+      WORDPRESS_DB_NAME: wordpress
+      WORDPRESS_DEBUG: "1"
+      WP_PORT: ${WP_PORT:-8190}
+      WORDPRESS_CONFIG_EXTRA: *wp-config-extra
+    volumes:
+      - wordpress:/var/www/html
+      - ./secondrail-for-woocommerce:/var/www/html/wp-content/plugins/secondrail-for-woocommerce:ro
+      - ./docker/wordpress/mpm_prefork.conf:/etc/apache2/mods-available/mpm_prefork.conf:ro
+    mem_limit: 512m
+
+  tools:
+    profiles: ["tools"]
+    build: ./docker/tools
+    image: plugin-secondrail-tools:dev
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      WORDPRESS_DB_HOST: db
+      WORDPRESS_DB_USER: wordpress
+      WORDPRESS_DB_PASSWORD: ${DB_PASSWORD:?run bin/setup}
+      WORDPRESS_DB_NAME: wordpress
+      WORDPRESS_DEBUG: "1"
+      WP_PORT: ${WP_PORT:-8190}
+      WORDPRESS_CONFIG_EXTRA: *wp-config-extra
+      WP_PHPUNIT__TESTS_CONFIG: /repo/tests/phpunit/wp-tests-config.php
+      HOME: /tmp
+    working_dir: /repo
+    volumes:
+      - .:/repo
+      - wordpress:/var/www/html
+      - ./secondrail-for-woocommerce:/var/www/html/wp-content/plugins/secondrail-for-woocommerce:ro
+
+  node:
+    profiles: ["tools"]
+    image: node:26.13.0-trixie-slim
+    working_dir: /repo/tests/e2e
+    environment:
+      HOME: /tmp
+      NPM_CONFIG_CACHE: /tmp/npm-cache
+    volumes:
+      - .:/repo
+
+volumes:
+  db:
+  wordpress:
