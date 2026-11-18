@@ -54,11 +54,15 @@ through `pre_http_request` and fails the test on a request nobody queued.
 Against the SecondRail development stack in `../orqbit` (it must be running):
 
 ```bash
-bin/sandbox connect   # API base and a sandbox key into .env, settings, webhook endpoint, test event
+SECONDRAIL_MERCHANT=demo bin/sandbox connect   # API base and a sandbox key into .env, settings, webhook endpoint, test event
 bin/e2e               # Playwright specs (host Node, system Chromium, one worker)
 bin/sandbox clean     # delete the endpoint, revoke the key, remove both lines from .env
 bin/dc stop
 ```
+
+`SECONDRAIL_MERCHANT` is the merchant the store charges for. Test runs use `demo`, the platform's
+test merchant. Without it the store connects to `honeypacks`, the merchant used for demos, so
+orders placed by hand show up in that merchant's dashboard.
 
 `bin/sandbox connect` attaches WordPress to the SecondRail network (`compose.sandbox.yml`) so the
 SecondRail worker can deliver webhooks to `http://plugin-secondrail-wp/?wc-api=secondrail_webhook`.

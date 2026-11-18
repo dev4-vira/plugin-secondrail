@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Real-sandbox run (R11) against the SecondRail development stack in ../orqbit.
 #   bin/sandbox connect   API base and a sandbox key into .env, gateway settings, webhook, test event
+#                         SECONDRAIL_MERCHANT picks the merchant: `honeypacks` (default, demos) or
+#                         `demo` (the platform's test merchant, for test runs)
 #   bin/sandbox clean     delete the endpoint, revoke the key, remove both lines from .env
 # Secrets go straight into .env and into the container environment; they are never printed.
 set -euo pipefail
@@ -10,6 +12,11 @@ bin="$root/bin"
 platform="$(cd "$root/../orqbit" && pwd)"
 env_file="$root/.env"
 key_name="plugin-secondrail-e2e"
+merchant="${SECONDRAIL_MERCHANT:-honeypacks}"
+if [[ ! "$merchant" =~ ^[a-z0-9-]+$ ]]; then
+	echo "SECONDRAIL_MERCHANT must be a merchant slug" >&2
+	exit 1
+fi
 scopes='["payments:read","payments:write","refunds:read","refunds:write","action_links:write","webhooks:read","webhooks:write"]'
 
 django() {
@@ -20,7 +27,7 @@ revoke_keys() {
 	django "
 from apps.iam.models import ApiKey
 from apps.iam.services import api_keys
-for key in ApiKey.objects.filter(tenant__slug='honeypacks', name='$key_name', revoked_at__isnull=True):
+for key in ApiKey.objects.filter(name='$key_name', revoked_at__isnull=True):
     api_keys.revoke(key)
     print('revoked', key.public_id)
 "
@@ -69,7 +76,7 @@ connect() {
 	secret="$(django "
 from apps.iam.services import api_keys
 from apps.tenants.models import Tenant
-created = api_keys.create(Tenant.objects.get(slug='honeypacks'), False, name='$key_name', scopes=$scopes)
+created = api_keys.create(Tenant.objects.get(slug='$merchant'), False, name='$key_name', scopes=$scopes)
 print(created.secret)
 " | tail -n 1)"
 	if [[ "$secret" != sk_test_* ]]; then
